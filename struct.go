@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
+
+	"github.com/antihax/goesi"
 	"github.com/bwmarrin/discordgo"
-	"github.com/parnurzeal/gorequest"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
@@ -14,14 +16,17 @@ type ZKillBot struct {
 	// Logging
 	log *logrus.Logger
 
-	// GoRequest
-	request *gorequest.SuperAgent
+	// goesi Client
+	esiClient *goesi.APIClient
 
 	// Discord Methods
 	discord *discordgo.Session
 
 	// Discord message commands
 	eveIDLookup chan discordCommand
+
+	// Context
+	ctx context.Context
 }
 
 /*
@@ -30,24 +35,6 @@ type ZKillBot struct {
 type discordCommand struct {
 	ChannelID string
 	Message   string
-}
-
-/*
-   Eve Universe ID response
-*/
-type eveUniverseIDResponse struct {
-	Alliances []struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-	} `json:"alliances"`
-	Characters []struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-	} `json:"characters"`
-	Corporations []struct {
-		ID   int    `json:"id"`
-		Name string `json:"name"`
-	} `json:"corporations"`
 }
 
 /*
