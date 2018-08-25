@@ -3,15 +3,18 @@ package main
 import (
 	"fmt"
 	"os"
-
 	"regexp"
 	"time"
 
 	"encoding/json"
 	"github.com/bwmarrin/discordgo"
+	"github.com/parnurzeal/gorequest"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
+	"net/http"
 )
+
+const ESIURL = "https://esi.evetech.net/latest/"
 
 /*
    Init function for setting up basic config/logging and method struct
@@ -53,10 +56,14 @@ func NewZKillBot() ZKillBot {
 	// Init channels
 	zkillGroupLookup := make(chan discordCommand, 5)
 
+	// Init gorequest
+	request := gorequest.New()
+
 	return ZKillBot{
 		viperConfig: viper.GetViper(),
 		log:         log,
 		eveIDLookup: zkillGroupLookup,
+		request:     request,
 	}
 }
 
@@ -121,7 +128,8 @@ func (bot ZKillBot) discordReceive(s *discordgo.Session, m *discordgo.MessageCre
 */
 func (bot ZKillBot) eveIDLookupCmd() {
 	log := bot.log
-	//discord := bot.discord
+	request := bot.request
+	discord := bot.discord
 
 	log.Debug("Starting Eve-ID lookup thread")
 	for {
@@ -130,17 +138,57 @@ func (bot ZKillBot) eveIDLookupCmd() {
 		case message := <-bot.eveIDLookup:
 			log.Debugf("Lookup command received: %v, %v", message.Message, message.ChannelID)
 
-			// Remove command prefix
+			// Remove command prefix and format request
 			msg := regexp.MustCompile(`!lookup\s`).ReplaceAllString(message.Message, "")
+			searchString := fmt.Sprintf(`["%v"]`, msg)
 
-			// Create json for query
-			apiRequestJSON, err := json.Marshal(eveUniverseIDLookup{msg})
-			if err != nil {
-				log.Errorf("failed to marshal json request: %v")
+			// Send request
+			resp, body, errs := request.Post(ESIURL + "universe/ids/").Send(searchString).EndBytes()
+			if errs != nil {
+				log.Errorf("EVE ESI request failed: %v", errs)
+				discord.ChannelMessageSend(message.ChannelID, "EVE ESI error, unable to perform lookup at this time.")
 				break
 			}
 
-			// make do stuff
+			if resp.StatusCode != http.StatusOK {
+				log.Errorf("EVE ESI request failed code: %v, err: %v", resp.StatusCode, resp.Body)
+				discord.ChannelMessageSend(message.ChannelID, "EVE ESI error, unable to perform lookup at this time.")
+				break
+			}
+
+			// Unmarshal response body
+			esiResp := eveUniverseIDResponse{}
+			err := json.Unmarshal(body, &esiResp)
+			if err != nil {
+				log.Errorf("EVE ESI request failed: %v", errs)
+				discord.ChannelMessageSend(message.ChannelID, "EVE ESI error, unable to perform lookup at this time.")
+				break
+			}
+
+			// Handle response json
+			// We check if there is exactly 1 match for each sub-type, if so we return that ID
+			if len(esiResp.Alliances) == 1 {
+				log.Infof("Alliance ID found for: %v, ID: %v", esiResp.Alliances[0].Name, esiResp.Alliances[0].ID)
+				discord.ChannelMessageSend(message.ChannelID, fmt.Sprintf(`Alliance ID: %v, found for name: %v`, esiResp.Alliances[0].ID, esiResp.Alliances[0].Name))
+				break
+			}
+
+			if len(esiResp.Corporations) == 1 {
+				log.Infof("Corporation ID found for: %v, ID: %v", esiResp.Corporations[0].Name, esiResp.Corporations[0].ID)
+				discord.ChannelMessageSend(message.ChannelID, fmt.Sprintf(`Corporation ID: %v, found for name: %v`, esiResp.Corporations[0].ID, esiResp.Corporations[0].Name))
+				break
+			}
+
+			if len(esiResp.Characters) == 1 {
+				log.Infof("Character ID found for: %v, ID: %v", esiResp.Characters[0].Name, esiResp.Characters[0].ID)
+				discord.ChannelMessageSend(message.ChannelID, fmt.Sprintf(`Character ID: %v, found for name: %v`, esiResp.Characters[0].ID, esiResp.Characters[0].Name))
+				break
+			}
+
+			// No exact match found, attempt partial match with ESI /search
+			log.Info("No exact match found, attempting ESI search")
+
+			// TODO wildcard searches
 
 		default:
 			// don't murder the cpu
