@@ -260,6 +260,7 @@
   input-imports = [
     "github.com/antihax/goesi",
     "github.com/bwmarrin/discordgo",
+    "github.com/gorilla/websocket",
     "github.com/gregjones/httpcache",
     "github.com/onrik/logrus/filename",
     "github.com/sirupsen/logrus",

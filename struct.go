@@ -5,11 +5,22 @@ import (
 
 	"github.com/antihax/goesi"
 	"github.com/bwmarrin/discordgo"
+	"github.com/gorilla/websocket"
 	"github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
+	"sync"
 )
 
+/*
+	Main struct for bot
+*/
 type ZKillBot struct {
+	// Context
+	ctx context.Context
+
+	// Mux
+	mux sync.Mutex
+
 	// Config Management
 	viperConfig *viper.Viper
 
@@ -19,18 +30,19 @@ type ZKillBot struct {
 	// goesi Client
 	esiClient *goesi.APIClient
 
-	// Discord Methods
+	// Discord websocket session
 	discord *discordgo.Session
 
-	// Discord message commands
-	eveIDLookup chan discordCommand
+	// Channels
+	eveIDLookup  chan discordCommand
+	zkillMessage chan string
 
-	// Context
-	ctx context.Context
+	// zkillboard websocket
+	zKillboard *websocket.Conn
 }
 
 /*
-	Struct for passing commands from discord to zkill functions
+	passing commands from discord to zkill functions
 */
 type discordCommand struct {
 	ChannelID string

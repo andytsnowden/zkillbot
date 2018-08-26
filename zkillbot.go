@@ -11,6 +11,7 @@ import (
 
 	"github.com/antihax/goesi"
 	"github.com/bwmarrin/discordgo"
+	"github.com/gorilla/websocket"
 	"github.com/gregjones/httpcache"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
@@ -55,8 +56,10 @@ func NewZKillBot() ZKillBot {
 	log := ConfigureLogging(viper.GetViper())
 	log.Debug("Logging initialized")
 
+	// TODO come up with good channel sizes
 	// Init channels
-	zkillGroupLookup := make(chan discordCommand, 5)
+	eveIDLookupChan := make(chan discordCommand, 5)
+	zkillMessageChan := make(chan string, 5)
 
 	// Init Context, Httpcache and goesi
 	tCache := httpcache.NewMemoryCacheTransport()
@@ -70,11 +73,14 @@ func NewZKillBot() ZKillBot {
 
 	// Return setup struct
 	return ZKillBot{
+		ctx:         context.Background(),
 		viperConfig: viper.GetViper(),
 		log:         log,
-		eveIDLookup: zkillGroupLookup,
-		esiClient:   esiClient,
-		ctx:         context.Background(),
+
+		eveIDLookup:  eveIDLookupChan,
+		zkillMessage: zkillMessageChan,
+
+		esiClient: esiClient,
 	}
 }
 
@@ -84,6 +90,7 @@ func NewZKillBot() ZKillBot {
 func (bot *ZKillBot) connectDiscord() {
 	log := bot.log
 	discordToken := bot.viperConfig.GetString("discord_bot_token")
+	log.Info("Starting websocket connection to Discord")
 
 	// bail on missing token
 	if len(discordToken) == 0 {
@@ -110,6 +117,48 @@ func (bot *ZKillBot) connectDiscord() {
 }
 
 /*
+	Connect to zkill websocket
+*/
+func (bot *ZKillBot) connectzKillboardWS() {
+	log := bot.log
+	log.Info("Starting websocket connection to zKillboard")
+
+	// Lock all other access until we set
+	bot.mux.Lock()
+
+	// Connect to websocket
+	conn, _, err := websocket.DefaultDialer.Dial("wss://zkillboard.com:2096", nil)
+	if err != nil {
+		log.Errorf("Failed to connec to zkill wss: %v", err)
+	}
+
+	// Set method websocket
+	bot.zKillboard = conn
+	bot.mux.Unlock()
+
+	// Listen for messages
+	go func() {
+		for {
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				// TODO auto-reconnect would be a good feature
+				log.Println("read:", err)
+				return
+			}
+			// Put message into channel
+			bot.zkillMessage <- string(message)
+		}
+	}()
+
+	// TODO remove this once dynamic sub is working
+	// temp sub to all
+	err2 := conn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"action":"sub","channel":"killstream"}`)))
+	if err2 != nil {
+		log.Println("write:", err2)
+	}
+}
+
+/*
 	Call back for messages from any discord channel/server
 	After classification we send commands down specific channels as to not block discord
 */
@@ -129,14 +178,44 @@ func (bot ZKillBot) discordReceive(s *discordgo.Session, m *discordgo.MessageCre
 		return
 	}
 
-	bot.discord.ChannelMessageSend(m.ChannelID, "pong")
+	// TODO more commands!
+}
+
+/*
+	Message processor for zKillboard websocket message
+*/
+func (bot ZKillBot) zKillboardRecieve(cContext context.Context) {
+	log := bot.log
+
+	log.Debugf("Starting zKillboardRecieve thread")
+	for {
+		select {
+		// cancel cleanly
+		case <-cContext.Done():
+			return
+			// on message do work
+		case message := <-bot.zkillMessage:
+			log.Debugf("zkillmessage: %v", message)
+
+			// TODO for each kill we need to iterate over the killed, people who kills and look for a match in a reference map/slice/something
+			// TODO if that matches one of the IDs we're watching it needs to be sent to the correct channel
+
+			// for now yell for every kill
+			bot.discord.ChannelMessageSend("482251762863177741", "a kill happened somewhere")
+
+		default:
+			// don't murder the cpu
+			time.Sleep(500 * time.Nanosecond)
+		}
+	}
+	log.Debugf("Exited zKillboardRecieve thread")
 }
 
 /*
 	For a string look up the eve ID and type
 	The ID will be needed when creating the websocket connection to zkill
 */
-func (bot ZKillBot) eveIDLookupCmd() {
+func (bot ZKillBot) eveIDLookupCmd(cContext context.Context) {
 	log := bot.log
 	esiClient := bot.esiClient
 	discord := bot.discord
@@ -145,6 +224,9 @@ func (bot ZKillBot) eveIDLookupCmd() {
 	log.Debug("Starting Eve-ID lookup thread")
 	for {
 		select {
+		// cancel cleanly
+		case <-cContext.Done():
+			return
 		// on message do work
 		case message := <-bot.eveIDLookup:
 			log.Debugf("Lookup command received: %v, %v", message.Message, message.ChannelID)
