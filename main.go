@@ -11,16 +11,18 @@ func main() {
 	// Init bot
 	bot := NewZKillBot()
 
-	// Connect to Discord
-	bot.connectDiscord()
-	bot.connectzKillboardWS()
-
 	// Cancel Context
 	cContext, cSignal := context.WithCancel(bot.ctx)
 
+	// Connect to Discord
+	bot.connectDiscord()
+	bot.connectzKillboardWS()
+	bot.consumezKillboardWS(cContext)
+
 	// Runner Threads
 	go bot.eveIDLookupCmd(cContext)
-	go bot.zKillboardRecieve(cContext)
+	go bot.zKillboardReceive(cContext)
+	go bot.zKillboardTrack(cContext)
 
 	// Run forever unless we sig-exit
 	sc := make(chan os.Signal, 1)
