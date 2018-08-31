@@ -262,6 +262,7 @@
     "github.com/bwmarrin/discordgo",
     "github.com/gorilla/websocket",
     "github.com/gregjones/httpcache",
+    "github.com/mitchellh/mapstructure",
     "github.com/onrik/logrus/filename",
     "github.com/sirupsen/logrus",
     "github.com/spf13/pflag",

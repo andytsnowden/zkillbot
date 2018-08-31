@@ -14,7 +14,7 @@ func main() {
 	// Cancel Context
 	cContext, cSignal := context.WithCancel(bot.ctx)
 
-	// Connect to Discord
+	// Connect to Discord and zKillboard
 	bot.connectDiscord()
 	bot.connectzKillboardWS()
 	bot.consumezKillboardWS(cContext)
@@ -24,7 +24,7 @@ func main() {
 	go bot.zKillboardReceive(cContext)
 	go bot.zKillboardTrack(cContext)
 
-	// Run forever unless we sig-exit
+	// Run forever unless we sig close
 	sc := make(chan os.Signal, 1)
 	signal.Notify(sc, syscall.SIGINT, syscall.SIGTERM, os.Interrupt, os.Kill)
 	<-sc

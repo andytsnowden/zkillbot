@@ -11,9 +11,7 @@ import (
 	"github.com/spf13/viper"
 )
 
-/*
-	Main struct for bot
-*/
+// ZKillBot is the main struct
 type ZKillBot struct {
 	// Context
 	ctx context.Context
@@ -70,26 +68,25 @@ type cacheData struct {
 	} `json:"IDtoConv"`
 }
 
-/*
-   Storage for mappings between channels and eve along with settings for each
-*/
+// DataStorage is used to store the mapping between discord channels and eveID that we are tracking.
+// We store this index in both channel to eve_id and eve_id to channel
+//
+// This is initially set during bot initiation, then modified by zkillboardAddID and zkillboardRemoveID
 type DataStorage struct {
 	// Discord Channel -> Eve ID
-	ChannelMap map[string]map[int]*subscriptionData
+	ChannelMap map[string]map[int]*subscriptionData `mapstructure:"channelmap"`
 	// Eve ID -> Discord Channel
-	SubMap map[int]map[string]*subscriptionData
+	SubMap map[int]map[string]*subscriptionData `mapstructure:"submap"`
 }
 type subscriptionData struct {
-	DiscordChannelID string `json:"discord_channel_id"`
-	EveID            int    `json:"eve_id"`
-	EveName          string `json:"eve_name"`
-	EveCategory      string `json:"eve_category"`
-	MinVal           int    `json:"min_val"`
+	DiscordChannelID string `json:"discord_channel_id" mapstructure:"discord_channel_id"`
+	EveID            int    `json:"eve_id" mapstructure:"eve_id"`
+	EveName          string `json:"eve_name" mapstructure:"eve_name"`
+	EveCategory      string `json:"eve_category" mapstructure:"eve_category"`
+	MinVal           int    `json:"min_val" mapstructure:"min_val"`
 }
 
-/*
-   Kill Summary
-*/
+// KillSummary is the format messages from the zkill websocket json payload arrive in.
 type KillSummary struct {
 	Action        string `json:"action"`
 	KillID        int    `json:"killID"`

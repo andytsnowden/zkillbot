@@ -4,14 +4,13 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/mitchellh/mapstructure"
 	"github.com/onrik/logrus/filename"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
 )
 
-/*
-   Configure logging based on Viper config and return logging object
-*/
+// ConfigureLogging takes a Viper object and initializes the logging methods.
 func ConfigureLogging(viper *viper.Viper) (logger *log.Logger) {
 	// Parse log level
 	level, err := log.ParseLevel(viper.GetString("log_level"))
@@ -43,4 +42,27 @@ func ConfigureLogging(viper *viper.Viper) (logger *log.Logger) {
 	}
 
 	return log.StandardLogger()
+}
+
+// loadViperData takes a interface from viper.get and translates it into DataStorage via mapstructure.NewDecoder
+func loadViperData(data interface{}, log *log.Logger) DataStorage {
+	var dataStorage DataStorage
+
+	// Enable Weak input so it will type convert strings<->ints
+	config := &mapstructure.DecoderConfig{
+		WeaklyTypedInput: true,
+		Result:           &dataStorage,
+	}
+
+	decoder, err := mapstructure.NewDecoder(config)
+	if err != nil {
+		log.Errorf("Failed to create new decoder, no previous subscriptions will be loaded: %v", err)
+	}
+
+	err = decoder.Decode(data)
+	if err != nil {
+		log.Errorf("Failed to decode previous subscriptions, any new requests will erase the existing config: %v", err)
+	}
+
+	return dataStorage
 }

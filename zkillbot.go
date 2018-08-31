@@ -19,9 +19,8 @@ import (
 	"github.com/spf13/viper"
 )
 
-/*
-   Init function for setting up basic config/logging and method struct
-*/
+// NewZKillBot is the initialization function of the bot.
+// It reads or creates the configuration file via Viper, setups up channels, and starts logging.
 func NewZKillBot() ZKillBot {
 	// Command line flags
 	pflag.Bool("verbose", false, "Print logs to command line")
@@ -71,7 +70,7 @@ func NewZKillBot() ZKillBot {
 	dataStorage.ChannelMap = make(map[string]map[int]*subscriptionData, 10)
 
 	// Read in dataStorage from viper
-	// TODO viper can't natively do this, need a function
+	dataStorage = loadViperData(viper.Get("datastorage"), log)
 
 	// Init Context, Httpcache and goesi
 	tCache := httpcache.NewMemoryCacheTransport()
@@ -99,9 +98,7 @@ func NewZKillBot() ZKillBot {
 	}
 }
 
-/*
-	Connect to discord and set object
-*/
+// connectDiscord creats a websocket connection to the Discord API given a bot_token
 func (bot *ZKillBot) connectDiscord() {
 	log := bot.log
 	discordToken := bot.viperConfig.GetString("discord_bot_token")
@@ -131,9 +128,8 @@ func (bot *ZKillBot) connectDiscord() {
 	}
 }
 
-/*
-	Connect to zkill websocket
-*/
+// connectzKillboardWS creates a websocket connection to the zKillboard API
+// This function is designed to be called at any time if the connection were to be lost
 func (bot *ZKillBot) connectzKillboardWS() {
 	log := bot.log
 	log.Info("Starting websocket connection to zKillboard")
@@ -152,9 +148,8 @@ func (bot *ZKillBot) connectzKillboardWS() {
 	bot.mux.Unlock()
 }
 
-/*
-	Start routines for keepalive and message receiver
-*/
+// consumezKillboardWS creates two threads which listen for websocket messages and run a timer for keepalives
+// When a websocket payload is received it is pushed into the bot.zkillMessage channel for processing by zKillboardReceive
 func (bot ZKillBot) consumezKillboardWS(cContext context.Context) {
 	log := bot.log
 	conn := bot.zKillboard
@@ -218,10 +213,8 @@ func (bot ZKillBot) consumezKillboardWS(cContext context.Context) {
 	// todo on start-up we need to subscribe to the streams defined in the config
 }
 
-/*
-	Call back for messages from any discord channel/server
-	After classification we send commands down specific channels as to not block discord
-*/
+// discordReceive is a callback function that executes whenever a websocket message is received from Discord
+// Initial filtering and routing of the commands occurs here. each command will have a unique channel and processing thread
 func (bot ZKillBot) discordReceive(s *discordgo.Session, m *discordgo.MessageCreate) {
 	// Ignore my own messages
 	if m.Author.ID == s.State.User.ID {
@@ -251,9 +244,9 @@ func (bot ZKillBot) discordReceive(s *discordgo.Session, m *discordgo.MessageCre
 	// TODO more commands!
 }
 
-/*
-	Message processor for zKillboard websocket message
-*/
+// zKillboardReceive is a work in progress
+//
+// Current we accept messages off the bot.zkillMessage channel and print them directly to a testing discord channel
 func (bot ZKillBot) zKillboardReceive(cContext context.Context) {
 	log := bot.log
 
@@ -276,8 +269,6 @@ func (bot ZKillBot) zKillboardReceive(cContext context.Context) {
 			// TODO for each kill we need to iterate over the killed, people who kills and look for a match in a reference map/slice/something
 			// TODO if that matches one of the IDs we're watching it needs to be sent to the correct channel
 
-			// for now yell for every kill
-			//bot.discord.ChannelMessageSend("482251762863177741", "a kill happened somewhere")
 
 		default:
 			// don't murder the cpu
@@ -287,9 +278,10 @@ func (bot ZKillBot) zKillboardReceive(cContext context.Context) {
 	log.Debugf("Exited zKillboardReceive thread")
 }
 
-/*
-   Handle adding and removing ID subscriptions from the zKillboard websocket
-*/
+// zKillboardTrack handles subscription requests from discord commands
+//
+// We accept commands !track <eve_id> <min_value> and !track remove <eve_id> as commands here
+// If no sub-command is provided a contextual help will be returned TODO
 func (bot ZKillBot) zKillboardTrack(cContext context.Context) {
 	log := bot.log
 	discord := bot.discord
@@ -346,9 +338,7 @@ func (bot ZKillBot) zKillboardTrack(cContext context.Context) {
 	log.Debugf("Exited zKillboardTrack thread")
 }
 
-/*
-   Given ID and min_value add ID to tracking and subscribe on zkillboard websocket connection
-*/
+// zkillboardAddID handles adding the requested ID to the mapping struct and sending the subscription command to the zkillboard websocket.
 func (bot *ZKillBot) zkillboardAddID(channelID string, eveID int, minVal int) {
 	log := bot.log
 	discord := bot.discord
@@ -428,10 +418,9 @@ func (bot *ZKillBot) zkillboardAddID(channelID string, eveID int, minVal int) {
 	return
 }
 
-/*
-	For a string look up the eve ID and type
-	The ID will be needed when creating the websocket connection to zkill
-*/
+// eveIDLookupCmd handles lookup requests from discord commands
+//
+// Given a string from discord we search the EVE API via ESI and return a limited amount of typed results
 func (bot ZKillBot) eveIDLookupCmd(cContext context.Context) {
 	log := bot.log
 	esiClient := bot.esiClient
