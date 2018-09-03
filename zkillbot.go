@@ -130,7 +130,7 @@ func (bot *ZKillBot) connectDiscord() {
 
 // connectzKillboardWS creates a websocket connection to the zKillboard API
 // This function is designed to be called at any time if the connection were to be lost
-func (bot *ZKillBot) connectzKillboardWS() {
+func (bot *ZKillBot) connectzKillboardWS() bool {
 	log := bot.log
 	log.Info("Starting websocket connection to zKillboard")
 
@@ -141,11 +141,28 @@ func (bot *ZKillBot) connectzKillboardWS() {
 	conn, _, err := websocket.DefaultDialer.Dial("wss://zkillboard.com:2096", nil)
 	if err != nil {
 		log.Errorf("Failed to connect to zkill wss: %v", err)
+		return false
+	} else {
+		// Automatically connect to any saved subscriptions
+		for _, subs := range bot.dataStorage.SubMap {
+			// range over subs
+			for _, subData := range subs {
+				// build sub payload and send
+				subString := []byte(fmt.Sprintf(`{"action":"sub","channel":"%v:%v"}`, subData.EveCategory, subData.EveID))
+				err := conn.WriteMessage(websocket.TextMessage, subString)
+				if err != nil {
+					log.Errorf("Failed to subscribe to killstream: %v", err)
+				} else {
+					log.Debugf("subscribed to killstream for id: %v, name: %v", subData.EveID, subData.EveName)
+				}
+			}
+		}
 	}
 
 	// Set method websocket
 	bot.zKillboard = conn
 	bot.mux.Unlock()
+	return true
 }
 
 // consumezKillboardWS creates two threads which listen for websocket messages and run a timer for keepalives
@@ -170,11 +187,14 @@ func (bot ZKillBot) consumezKillboardWS(cContext context.Context) {
 					bot.mux.Lock()
 					bot.zKillboard.Close()
 					bot.mux.Unlock()
-					// connect
-					bot.connectzKillboardWS()
 
-					// Delay a few seconds
-					time.Sleep(5 * time.Second)
+					// connect until connected
+					for connected := false ; !connected; {
+						connected = bot.connectzKillboardWS()
+
+						// Delay a few seconds
+						time.Sleep(5 * time.Second)
+					}
 				} else {
 					// Put message into channel
 					bot.zkillMessage <- string(message)
@@ -200,17 +220,18 @@ func (bot ZKillBot) consumezKillboardWS(cContext context.Context) {
 					bot.mux.Lock()
 					bot.zKillboard.Close()
 					bot.mux.Unlock()
-					// connect
-					bot.connectzKillboardWS()
 
-					// Delay a few seconds
-					time.Sleep(5 * time.Second)
+					// connect until connected
+					for connected := false ; !connected; {
+						connected = bot.connectzKillboardWS()
+
+						// Delay a few seconds
+						time.Sleep(5 * time.Second)
+					}
 				}
 			}
 		}
 	}(cContext)
-
-	// todo on start-up we need to subscribe to the streams defined in the config
 }
 
 // discordReceive is a callback function that executes whenever a websocket message is received from Discord
