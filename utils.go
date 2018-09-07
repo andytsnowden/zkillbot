@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"os"
 
+	"math"
+	"math/rand"
+	"time"
+
 	"github.com/mitchellh/mapstructure"
 	"github.com/onrik/logrus/filename"
 	log "github.com/sirupsen/logrus"
 	"github.com/spf13/viper"
-	"time"
-	"math"
-	"math/rand"
 )
 
 // ConfigureLogging takes a Viper object and initializes the logging methods.
