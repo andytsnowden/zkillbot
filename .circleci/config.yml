@@ -11,6 +11,6 @@ jobs:
     steps:
     - checkout
     - run: dep ensure
-    - run: go test -v ./...
+    - run: go test -v -race -coverprofile=coverage.txt -covermode=atomic ./...
     - run: go build
     - run: bash <(curl -s https://codecov.io/bash)
