@@ -10,6 +10,6 @@ jobs:
     working_directory: /go/src/github.com/andytsnowden/zkillbot
     steps:
     - checkout
-
+    - run: dep ensure
     - run: go test -v ./...
     - run: go build
