@@ -94,12 +94,28 @@
   revision = "60711f1a8329503b04e1c88535f419d0bb440bff"
 
 [[projects]]
+  digest = "1:cdb899c199f907ac9fb50495ec71212c95cb5b0e0a8ee0800da0238036091033"
+  name = "github.com/mattn/go-runewidth"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "ce7b0b5c7b45a81508558cd1dba6bb1e4ddb51bb"
+  version = "v0.0.3"
+
+[[projects]]
   branch = "master"
   digest = "1:5ab79470a1d0fb19b041a624415612f8236b3c06070161a910562f2b2d064355"
   name = "github.com/mitchellh/mapstructure"
   packages = ["."]
   pruneopts = "UT"
   revision = "f15292f7a699fcc1a38a80977f80a046874ba8ac"
+
+[[projects]]
+  branch = "master"
+  digest = "1:4daa045e1e1f3e23f4b07db6880cdf9f259dab65312dfe244a878e6070faaf77"
+  name = "github.com/olekukonko/tablewriter"
+  packages = ["."]
+  pruneopts = "UT"
+  revision = "d4647c9c7a84d847478d890b816b7d8b62b0b279"
 
 [[projects]]
   branch = "master"
@@ -263,6 +279,7 @@
     "github.com/gorilla/websocket",
     "github.com/gregjones/httpcache",
     "github.com/mitchellh/mapstructure",
+    "github.com/olekukonko/tablewriter",
     "github.com/onrik/logrus/filename",
     "github.com/sirupsen/logrus",
     "github.com/spf13/pflag",

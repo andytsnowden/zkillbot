@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -15,13 +16,14 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/gorilla/websocket"
 	"github.com/gregjones/httpcache"
+	"github.com/olekukonko/tablewriter"
 	"github.com/spf13/pflag"
 	"github.com/spf13/viper"
 )
 
 // NewZKillBot is the initialization function of the bot.
 // It reads or creates the configuration file via Viper, setups up channels, and starts logging.
-func NewZKillBot() ZKillBot {
+func NewZKillBot() *ZKillBot {
 	// Command line flags
 	pflag.Bool("verbose", false, "Print logs to command line")
 	pflag.Parse()
@@ -83,7 +85,7 @@ func NewZKillBot() ZKillBot {
 	esiClient := goesi.NewAPIClient(httpClient, "andytsnowden/zkillbot")
 
 	// Return setup struct
-	return ZKillBot{
+	return &ZKillBot{
 		ctx:         context.Background(),
 		viperConfig: viper.GetViper(),
 		log:         log,
@@ -98,7 +100,7 @@ func NewZKillBot() ZKillBot {
 	}
 }
 
-// connectDiscord creats a websocket connection to the Discord API given a bot_token
+// connectDiscord creates a websocket connection to the Discord API given a bot_token
 func (bot *ZKillBot) connectDiscord() {
 	log := bot.log
 	discordToken := bot.viperConfig.GetString("discord_bot_token")
@@ -129,20 +131,42 @@ func (bot *ZKillBot) connectDiscord() {
 }
 
 // connectzKillboardWS creates a websocket connection to the zKillboard API
-// This function is designed to be called at any time if the connection were to be lost
-func (bot *ZKillBot) connectzKillboardWS() bool {
+// This function will attempt to maintain the websocket connection and reconnect if it fails using a backoff
+func (bot *ZKillBot) connectzKillboardWS() {
 	log := bot.log
-	log.Info("Starting websocket connection to zKillboard")
+	boff := Backoff{
+		Min:    500 * time.Millisecond,
+		Max:    5 * time.Minute,
+		Factor: 2,
+		Jitter: true,
+	}
 
-	// Lock all other access until we set
-	bot.mux.Lock()
+	// Forever keep the connection alive
+	for {
+		conn, _, err := websocket.DefaultDialer.Dial("wss://zkillboard.com:2096", nil)
 
-	// Connect to websocket
-	conn, _, err := websocket.DefaultDialer.Dial("wss://zkillboard.com:2096", nil)
-	if err != nil {
-		log.Errorf("Failed to connect to zkill wss: %v", err)
-		return false
-	} else {
+		if err != nil {
+			dur := boff.Duration()
+			log.Warnf("zkill reconnection %d failed: %s", boff.Attempts(), err)
+			log.Warnln(" -> reconnecting in", dur)
+			time.Sleep(dur)
+			continue
+		}
+		log.Info("Connected to zKillboard Websocket")
+
+		// reset backoff once successfully reconnected
+		boff.Reset()
+
+		bot.mux.Lock()
+		// set conn for everyone
+		if bot.zKillboard != nil {
+			bot.zKillboard.Close()
+			bot.zKillboard = nil
+		}
+		bot.zKillboard = conn
+		bot.mux.Unlock()
+
+		log.Errorf("Connection before resub: %s", bot.zKillboard.UnderlyingConn().LocalAddr().String())
 		// Automatically connect to any saved subscriptions
 		for _, subs := range bot.dataStorage.SubMap {
 			// range over subs
@@ -157,81 +181,35 @@ func (bot *ZKillBot) connectzKillboardWS() bool {
 				}
 			}
 		}
+
+		// subscribe to zkillboard's public channel since they don't response to websocket PINGs
+		err = bot.zKillboard.WriteMessage(websocket.TextMessage, []byte(`{"action":"sub","channel":"public"}`))
+		if err != nil {
+			log.Errorf("Failed to sub to public status")
+			break
+		}
+
+		// Listen for messages
+		for {
+			// set a deadline so ReadMessage will timeout eventually
+			// normally the public channel will send a message every 15 seconds, if not there's a good chance the connection is dead
+			conn.SetReadDeadline(time.Now().Add(time.Second * 30))
+			_, message, err := conn.ReadMessage()
+			if err != nil {
+				// log error and exit for, this will trigger a new connection
+				log.Errorf("Error while reading from WS, reconnecting: %v", err)
+				break
+				// trigger context.cancel to kill keepalive thread
+			} else {
+				// Put message into channel
+				bot.zkillMessage <- string(message)
+			}
+
+		}
+
+		// Close connection
+		bot.zKillboard.Close()
 	}
-
-	// Set method websocket
-	bot.zKillboard = conn
-	bot.mux.Unlock()
-	return true
-}
-
-// consumezKillboardWS creates two threads which listen for websocket messages and run a timer for keepalives
-// When a websocket payload is received it is pushed into the bot.zkillMessage channel for processing by zKillboardReceive
-func (bot ZKillBot) consumezKillboardWS(cContext context.Context) {
-	log := bot.log
-	conn := bot.zKillboard
-
-	// Listen for messages
-	go func(ctx context.Context) {
-		log.Debugf("Starting zKillboard websocket receiver thread")
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			default:
-				_, message, err := conn.ReadMessage()
-				if err != nil {
-					log.Errorf("Error while reading from WS, reconnecting: %v", err)
-
-					// On error we disconnect and reconnect
-					bot.mux.Lock()
-					bot.zKillboard.Close()
-					bot.mux.Unlock()
-
-					// connect until connected
-					for connected := false ; !connected; {
-						connected = bot.connectzKillboardWS()
-
-						// Delay a few seconds
-						time.Sleep(5 * time.Second)
-					}
-				} else {
-					// Put message into channel
-					bot.zkillMessage <- string(message)
-				}
-			}
-		}
-	}(cContext)
-
-	// keep alive
-	go func(ctx context.Context) {
-		log.Debug("Starting zkillboard websocket keepalive thread")
-		timer := time.NewTicker(30 * time.Second)
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-				ping := bot.zKillboard.WriteMessage(websocket.PingMessage, []byte("PING"))
-				if ping != nil {
-					log.Errorf("failed to send PING, reconnecting: %v", ping)
-
-					// On error we disconnect and reconnect
-					bot.mux.Lock()
-					bot.zKillboard.Close()
-					bot.mux.Unlock()
-
-					// connect until connected
-					for connected := false ; !connected; {
-						connected = bot.connectzKillboardWS()
-
-						// Delay a few seconds
-						time.Sleep(5 * time.Second)
-					}
-				}
-			}
-		}
-	}(cContext)
 }
 
 // discordReceive is a callback function that executes whenever a websocket message is received from Discord
@@ -279,7 +257,7 @@ func (bot ZKillBot) zKillboardReceive(cContext context.Context) {
 			return
 			// on message do work
 		case message := <-bot.zkillMessage:
-			log.Debugf("zkillmessage: %v", message)
+			// TODO handle public info and store for later use
 
 			kill := KillSummary{}
 			err := json.Unmarshal([]byte(message), &kill)
@@ -289,7 +267,6 @@ func (bot ZKillBot) zKillboardReceive(cContext context.Context) {
 
 			// TODO for each kill we need to iterate over the killed, people who kills and look for a match in a reference map/slice/something
 			// TODO if that matches one of the IDs we're watching it needs to be sent to the correct channel
-
 
 		default:
 			// don't murder the cpu
@@ -303,13 +280,21 @@ func (bot ZKillBot) zKillboardReceive(cContext context.Context) {
 //
 // We accept commands !track <eve_id> <min_value> and !track remove <eve_id> as commands here
 // If no sub-command is provided a contextual help will be returned TODO
-func (bot ZKillBot) zKillboardTrack(cContext context.Context) {
+func (bot *ZKillBot) zKillboardTrack(cContext context.Context) {
 	log := bot.log
 	discord := bot.discord
+
+	help := `Valid commands:
+!track <eve_id>              - Add a eve ID to tracking
+!track <eve_id> <min_value>  - Add a eve ID to tracking with a minimum isk filter
+!track remove <eve_id>       - Remove a eve ID from tracking
+!track remove                - Removes all ID from tracking
+!track list                  - List all tracked IDs and their names/types`
 
 	// sub-command patterns
 	addID := regexp.MustCompile(`!track\s(?P<first_char>\d+)\s?(\d+)?`) // !track <eve_id> | !track <eve_id> <min_value>
 	removeID := regexp.MustCompile(`!track\sremove\s?(\d+)?`)           // !track remove | !track remove <eve_id)
+	listID := regexp.MustCompile(`!track\slist.*?`)                     // !track list
 
 	log.Debugf("Starting zKillboardTrack thread")
 	for {
@@ -336,19 +321,35 @@ func (bot ZKillBot) zKillboardTrack(cContext context.Context) {
 					minVal = 0
 				}
 
-				// Handle Add Request, errors handled internally
+				// Handle Add Request
 				bot.zkillboardAddID(message.ChannelID, id, minVal)
 				break
 
 			case removeID.MatchString(message.Message):
 				log.Info("Remove sub-command")
-				// TODO implement remove function
+
+				// Pull out ID and optionally min filter value
+				id, err := strconv.Atoi(addID.FindAllStringSubmatch(message.Message, -1)[0][1]) // This is the first capture group from the first match and converts to int
+				if err != nil {
+					discord.ChannelMessageSend(message.ChannelID, "ID to add must be numeric")
+					break
+				}
+
+				// Handle Remove Request
+				bot.zkillboardRemoveID(message.ChannelID, id)
+				break
+
+			case listID.MatchString(message.Message):
+				log.Info("List sub-command")
+
+				// Handle List Request
+				bot.zkillboardListIDs(message.ChannelID)
 				break
 
 			default:
 				log.Debugf("Invalid !track sub-command")
-				// TODO make help message
-				discord.ChannelMessageSend(message.ChannelID, "Invalid !track command, <help text here>")
+				// ``` wrapper tells discord to use a code block
+				discord.ChannelMessageSend(message.ChannelID, "Invalid !track command, ```"+help+"```")
 				break
 			}
 		default:
@@ -427,9 +428,10 @@ func (bot *ZKillBot) zkillboardAddID(channelID string, eveID int, minVal int) {
 	}
 
 	// Subscribe to channel
+	log.Errorf("Connection before write: %s", bot.zKillboard.UnderlyingConn().LocalAddr().String())
 	subErr := bot.zKillboard.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"action":"sub","channel":"%v:%v"}`, search[0].Category, eveID)))
 	if subErr != nil {
-		log.Errorf("Failed to subscribe to killstream: %v", err)
+		log.Errorf("Failed to subscribe to killstream: %v", subErr)
 		discord.ChannelMessageSend(channelID, "Unable to subscribe to killstream due to error")
 		return
 	}
@@ -437,6 +439,55 @@ func (bot *ZKillBot) zkillboardAddID(channelID string, eveID int, minVal int) {
 	log.Infof("Eve ID: %v added to channel", eveID)
 	discord.ChannelMessageSend(channelID, fmt.Sprintf("Eve ID: %v (%v: %v) added to channel with minimum value filter of: %v", eveID, search[0].Category, search[0].Name, minVal))
 	return
+}
+
+// zkillboardRemoveID handles removing a ID from subscription and the internal mapping
+func (bot *ZKillBot) zkillboardRemoveID(channelID string, eveID int) {
+	//_ := bot.log
+	//_ := bot.discord
+	//_ := bot.esiClient
+
+	// TODO check if currently subscribed
+	// check if multiple channels share a subscription
+	// - if yes don't unsubscribe but remove sub->channel mapping
+	// - if no unsubscribe and remove mapping
+}
+
+// zkillboardListIDs lists all ID's currently being tracked for the channel by zkillbot
+func (bot ZKillBot) zkillboardListIDs(channelID string) {
+	log := bot.log
+	discord := bot.discord
+
+	// Does the channel have any IDs being tracked?
+	if len(bot.dataStorage.ChannelMap[channelID]) == 0 {
+		log.Infof("List command for channelID %v fails due to no tracked IDs", channelID)
+		discord.ChannelMessageSend(channelID, "Channel currently has no tracked ID, use the !track command to add")
+		return
+	}
+
+	var data [][]string
+
+	// Iterate over ids
+	for _, IDs := range bot.dataStorage.ChannelMap[channelID] {
+		data = append(data, []string{
+			strconv.Itoa(IDs.EveID),
+			strings.Title(IDs.EveCategory),
+			IDs.EveName,
+			strconv.Itoa(IDs.MinVal),
+		})
+	}
+
+	// Take data from map to write it into a nice looking spaced table
+	buf := new(bytes.Buffer)
+	table := tablewriter.NewWriter(buf)
+	table.SetHeader([]string{"Eve-ID", "Type", "Name", "Min Amount"})
+	table.SetBorders(tablewriter.Border{Left: true, Top: false, Right: true, Bottom: false})
+	table.SetCenterSeparator("|")
+	table.AppendBulk(data) // Add Bulk Data
+	table.Render()
+
+	// send to discord as code block
+	discord.ChannelMessageSend(channelID, "```"+buf.String()+"```")
 }
 
 // eveIDLookupCmd handles lookup requests from discord commands
@@ -454,7 +505,7 @@ func (bot ZKillBot) eveIDLookupCmd(cContext context.Context) {
 		// cancel cleanly
 		case <-cContext.Done():
 			return
-		// on message do work
+			// on message do work
 		case message := <-bot.eveIDLookup:
 			log.Debugf("Lookup command received: %v, %v", message.Message, message.ChannelID)
 

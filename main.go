@@ -16,7 +16,7 @@ func main() {
 
 	// Connect to Discord and zKillboard
 	bot.connectDiscord()
-	bot.connectzKillboardWS()
+	go bot.connectzKillboardWS()
 
 	// Runner Threads
 	go bot.eveIDLookupCmd(cContext)
